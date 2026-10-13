@@ -1,0 +1,13 @@
+import test from 'node:test'; import assert from 'node:assert/strict';
+import { newState, ingest, reconcile } from './reconcile.mjs';
+const L = (tx, i, id, amt, b, extra={}) => ({ transactionHash: tx, logIndex: i, requestId: id, recipient: '0xB0B', amount: amt, blockNumber: b, ...extra });
+const exp = [{ requestId: 'r1', recipient: '0xb0b', amount: 5 }];
+test('matched after confirmations', () => { const s = ingest(newState(), [L('t1',0,'r1',5,10)], 21, 12); assert.equal(reconcile(s, exp).rows[0].status, 'MATCHED'); });
+test('pending when not enough confirmations', () => { const s = ingest(newState(), [L('t1',0,'r1',5,10)], 12, 12); assert.equal(reconcile(s, exp).rows[0].status, 'PENDING_CONFIRMATIONS'); });
+test('delayed: pending then matched as head advances', () => { const s = ingest(newState(), [L('t1',0,'r1',5,10)], 11, 5); assert.equal(reconcile(s,exp).rows[0].status,'PENDING_CONFIRMATIONS'); ingest(s, [], 14, 5); assert.equal(reconcile(s,exp).rows[0].status,'MATCHED'); });
+test('duplicate log delivery ignored', () => { const s = ingest(newState(), [L('t1',0,'r1',5,10), L('t1',0,'r1',5,10)], 30, 1); const r = reconcile(s, exp); assert.equal(r.rows[0].status, 'MATCHED'); assert.equal(r.duplicatesIgnored, 1); });
+test('missing', () => assert.equal(reconcile(newState(), exp).rows[0].status, 'MISSING'));
+test('mismatch amount', () => { const s = ingest(newState(), [L('t1',0,'r1',6,10)], 30, 1); assert.equal(reconcile(s, exp).rows[0].status, 'MISMATCH'); });
+test('unexpected event', () => { const s = ingest(newState(), [L('t9',0,'zz',1,10)], 30, 1); assert.deepEqual(reconcile(s, exp).rows.map(r=>r.status), ['MISSING','UNEXPECTED']); });
+test('reorg removed log goes back to missing', () => { const s = ingest(newState(), [L('t1',0,'r1',5,10)], 30, 1); ingest(s, [L('t1',0,'r1',5,10,{removed:true})], 31, 1); assert.equal(reconcile(s, exp).rows[0].status, 'MISSING'); });
+test('double execution detected (distinct logs same id)', () => { const s = ingest(newState(), [L('t1',0,'r1',5,10), L('t2',0,'r1',5,11)], 30, 1); assert.equal(reconcile(s, exp).rows[0].status, 'DOUBLE_EXECUTION'); });
